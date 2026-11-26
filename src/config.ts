@@ -5,6 +5,9 @@ export const OPENAI_DEFAULT_MODEL = "gpt-4";
 /** Sent as the API key when a base URL is set and no key is given. */
 export const PLACEHOLDER_API_KEY = "unused";
 
+/** inline: review comments on lines; summary: one PR comment, kept up to date. */
+export type ReviewMode = "inline" | "summary";
+
 export interface Config {
   githubToken: string;
   apiKey: string;
@@ -13,6 +16,9 @@ export interface Config {
   model: string;
   timeoutMs: number;
   maxRetries: number;
+  reviewMode: ReviewMode;
+  /** Summary mode sends at most this much diff text and says when it cut. */
+  maxDiffChars: number;
   exclude: string[];
 }
 
@@ -43,6 +49,8 @@ function readCount(
  * variable of the same name. With a base URL set the model defaults to
  * lab-coder and the key may be left out (a relay in front of the endpoint
  * holds the real one); without one the action keeps its OpenAI defaults.
+ * The review mode follows the same rule: summary with a base URL, inline
+ * without, unless review_mode says otherwise.
  */
 export function readConfig(
   getInput: InputReader,
@@ -56,6 +64,13 @@ export function readConfig(
   if (!apiKey && !baseURL) {
     throw new Error("OPENAI_API_KEY is required when no base URL is set");
   }
+  const mode =
+    getInput("review_mode").trim() || (baseURL ? "summary" : "inline");
+  if (mode !== "inline" && mode !== "summary") {
+    throw new Error(
+      `Input review_mode must be inline or summary, got "${mode}"`
+    );
+  }
   return {
     githubToken: getInput("GITHUB_TOKEN"),
     apiKey: apiKey || PLACEHOLDER_API_KEY,
@@ -65,6 +80,8 @@ export function readConfig(
       (baseURL ? LAB_DEFAULT_MODEL : OPENAI_DEFAULT_MODEL),
     timeoutMs: readCount(getInput, "timeout_seconds", 300, 1) * 1000,
     maxRetries: readCount(getInput, "max_retries", 2, 0),
+    reviewMode: mode,
+    maxDiffChars: readCount(getInput, "max_diff_chars", 60000, 1000),
     exclude: getInput("exclude")
       .split(",")
       .map((s) => s.trim()),

@@ -3,8 +3,23 @@ import OpenAI from "openai";
 import parseDiff, { Chunk, File } from "parse-diff";
 import minimatch from "minimatch";
 import { Config } from "./config";
-import { AIReview, EndpointUnavailableError, getAIResponse } from "./llm";
-import { createPrompt, PRDetails } from "./prompt";
+import {
+  AIReview,
+  EndpointUnavailableError,
+  getAIResponse,
+  getSummary,
+} from "./llm";
+import {
+  boundedDiff,
+  createPrompt,
+  createSummaryPrompt,
+  PRDetails,
+} from "./prompt";
+import {
+  formatSummaryComment,
+  SUMMARY_ACTIONS,
+  upsertSummaryComment,
+} from "./summary";
 
 export interface ReviewComment {
   body: string;
@@ -24,6 +39,7 @@ export interface PullRequestEvent {
 /** What a run did, so the entry point can report it. */
 export type RunOutcome =
   | { status: "reviewed"; comments: number }
+  | { status: "summarized"; comment: "created" | "updated" }
   | { status: "skipped"; reason: string };
 
 export type AskModel = (prompt: string) => Promise<AIReview[] | null>;
@@ -44,7 +60,22 @@ export async function getPRDetails(
     pull_number: number,
     title: prResponse.data.title ?? "",
     description: prResponse.data.body ?? "",
+    headSha: prResponse.data.head?.sha,
   };
+}
+
+/** Returns the whole PR diff against its base. */
+export async function getFullDiff(
+  octokit: Octokit,
+  prDetails: PRDetails
+): Promise<string> {
+  const response = await octokit.pulls.get({
+    owner: prDetails.owner,
+    repo: prDetails.repo,
+    pull_number: prDetails.pull_number,
+    mediaType: { format: "diff" },
+  });
+  return String(response.data);
 }
 
 /**
@@ -57,14 +88,7 @@ export async function getEventDiff(
   prDetails: PRDetails
 ): Promise<string | null | undefined> {
   if (event.action === "opened") {
-    const response = await octokit.pulls.get({
-      owner: prDetails.owner,
-      repo: prDetails.repo,
-      pull_number: prDetails.pull_number,
-      mediaType: { format: "diff" },
-    });
-    // @ts-expect-error - response.data is a string
-    return response.data;
+    return getFullDiff(octokit, prDetails);
   }
   if (event.action === "synchronize") {
     const response = await octokit.repos.compareCommits({
@@ -126,17 +150,52 @@ export async function analyzeCode(
   return comments;
 }
 
-/**
- * Reviews one pull_request event end to end. An unavailable model
- * endpoint skips the review and posts nothing.
- */
-export async function run(
+/** Summary mode: one prompt for the whole PR, one comment kept current. */
+async function runSummary(
   config: Config,
   event: PullRequestEvent,
+  prDetails: PRDetails,
   octokit: Octokit,
   openai: OpenAI
 ): Promise<RunOutcome> {
-  const prDetails = await getPRDetails(octokit, event);
+  if (!SUMMARY_ACTIONS.includes(event.action ?? "")) {
+    return {
+      status: "skipped",
+      reason: `unsupported event action "${event.action}"`,
+    };
+  }
+  const files = filterFiles(
+    parseDiff(await getFullDiff(octokit, prDetails)),
+    config.exclude
+  ).filter((file) => file.to !== "/dev/null");
+  if (files.length === 0) {
+    return { status: "skipped", reason: "no diff found" };
+  }
+  const { text, omitted } = boundedDiff(files, config.maxDiffChars);
+  if (!text) {
+    return { status: "skipped", reason: "every file is over max_diff_chars" };
+  }
+  const summary = await getSummary(
+    openai,
+    config.model,
+    createSummaryPrompt(text, prDetails)
+  );
+  if (!summary) {
+    return { status: "skipped", reason: "the model gave no usable reply" };
+  }
+  const body = formatSummaryComment(summary, config.model, prDetails, omitted);
+  const comment = await upsertSummaryComment(octokit, prDetails, body);
+  return { status: "summarized", comment };
+}
+
+/** Inline mode: one prompt per chunk, findings as line comments. */
+async function runInline(
+  config: Config,
+  event: PullRequestEvent,
+  prDetails: PRDetails,
+  octokit: Octokit,
+  openai: OpenAI
+): Promise<RunOutcome> {
   const diff = await getEventDiff(octokit, event, prDetails);
   if (diff === undefined) {
     return {
@@ -149,17 +208,9 @@ export async function run(
   }
 
   const files = filterFiles(parseDiff(diff), config.exclude);
-  let comments: ReviewComment[];
-  try {
-    comments = await analyzeCode(files, prDetails, (prompt) =>
-      getAIResponse(openai, config.model, prompt)
-    );
-  } catch (error) {
-    if (error instanceof EndpointUnavailableError) {
-      return { status: "skipped", reason: error.message };
-    }
-    throw error;
-  }
+  const comments = await analyzeCode(files, prDetails, (prompt) =>
+    getAIResponse(openai, config.model, prompt)
+  );
   if (comments.length > 0) {
     await octokit.pulls.createReview({
       owner: prDetails.owner,
@@ -170,4 +221,26 @@ export async function run(
     });
   }
   return { status: "reviewed", comments: comments.length };
+}
+
+/**
+ * Reviews one pull_request event end to end in the configured mode. An
+ * unavailable model endpoint skips the review and posts nothing.
+ */
+export async function run(
+  config: Config,
+  event: PullRequestEvent,
+  octokit: Octokit,
+  openai: OpenAI
+): Promise<RunOutcome> {
+  const prDetails = await getPRDetails(octokit, event);
+  const review = config.reviewMode === "summary" ? runSummary : runInline;
+  try {
+    return await review(config, event, prDetails, octokit, openai);
+  } catch (error) {
+    if (error instanceof EndpointUnavailableError) {
+      return { status: "skipped", reason: error.message };
+    }
+    throw error;
+  }
 }

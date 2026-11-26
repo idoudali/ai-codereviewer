@@ -63,8 +63,15 @@ local models. Nothing about the endpoint is built in: the URL, key and model are
 | `OPENAI_BASE_URL`  | `OPENAI_BASE_URL` env var, else OpenAI    | Base URL ending in `/v1`.                                                   |
 | `OPENAI_API_MODEL` | `lab-coder` with a base URL, else `gpt-4` | Any model name or gateway alias.                                            |
 | `OPENAI_API_KEY`   | `unused` with a base URL                  | Required without a base URL. Leave it out when a relay holds the real key.  |
+| `review_mode`      | `summary` with a base URL, else `inline`  | See below.                                                                  |
+| `max_diff_chars`   | `60000`                                   | Summary mode only; whole files, the rest are named as not reviewed.         |
 | `timeout_seconds`  | `300`                                     | Per model request.                                                          |
 | `max_retries`      | `2`                                       | Retries on 429, 5xx and timeouts (the client honours `Retry-After` ≤ 60 s). |
+
+In `summary` mode the action sends the whole PR diff (after `exclude`) in one request and posts one PR comment with a
+summary and a list of findings. Later pushes, `reopened` and `ready_for_review` edit that same comment, found by a hidden
+marker, so a PR never collects more than one. `inline` mode keeps the original behaviour: one request per diff chunk
+and line comments in a review.
 
 When the endpoint answers `503` (with or without `Retry-After`, for example while a model loads) or a request times
 out after its retries, the action posts nothing, writes a notice "AI review skipped: …" and exits successfully. Other

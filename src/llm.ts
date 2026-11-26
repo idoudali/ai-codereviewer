@@ -93,3 +93,35 @@ export async function getAIResponse(
     return null;
   }
 }
+
+/** Strips a leading <think>...</think> block that reasoning models may emit. */
+export function stripThinking(content: string): string {
+  return content.replace(/^\s*<think>[\s\S]*?<\/think>/, "").trim();
+}
+
+/**
+ * Asks the model for a whole-PR summary in Markdown. Throws
+ * EndpointUnavailableError when the endpoint is busy or slow; any other
+ * error is logged and gives null, and an empty reply gives null too.
+ */
+export async function getSummary(
+  openai: OpenAI,
+  model: string,
+  prompt: string
+): Promise<string | null> {
+  try {
+    const response = await openai.chat.completions.create({
+      model,
+      temperature: 0.2,
+      max_tokens: 1500,
+      messages: [{ role: "user", content: prompt }],
+    });
+    const text = stripThinking(response.choices[0].message?.content ?? "");
+    return text || null;
+  } catch (error) {
+    const unavailable = asUnavailable(error);
+    if (unavailable) throw unavailable;
+    console.error("Error:", error);
+    return null;
+  }
+}

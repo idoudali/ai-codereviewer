@@ -179,7 +179,7 @@ describe("against a mocked OpenAI-compatible endpoint", () => {
   it("does not skip on a 500", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     server = await startServer((_req, res) => sendJson(res, 500, {}));
-    const config = labConfig(server.url);
+    const config = labConfig(server.url, { review_mode: "inline" });
     const { octokit } = fakeOctokit();
     const outcome = await run(
       config,

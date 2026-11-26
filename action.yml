@@ -16,6 +16,14 @@ inputs:
     description: "Model name or alias. Defaults to lab-coder when a base URL is set, else gpt-4."
     required: false
     default: ""
+  review_mode:
+    description: "summary posts one PR comment (edited on later pushes) and no inline comments; inline posts line comments. Defaults to summary with a base URL, else inline."
+    required: false
+    default: ""
+  max_diff_chars:
+    description: "Summary mode sends at most this many characters of diff, whole files only, and names the files it left out."
+    required: false
+    default: "60000"
   timeout_seconds:
     description: "Timeout for each model request. A timeout skips the review instead of failing the step."
     required: false

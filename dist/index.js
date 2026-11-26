@@ -1,6 +1,84 @@
 require('./sourcemap-register.js');/******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
+/***/ 9139:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.runAction = void 0;
+const fs_1 = __nccwpck_require__(7147);
+const core = __importStar(__nccwpck_require__(2186));
+const rest_1 = __nccwpck_require__(5375);
+const config_1 = __nccwpck_require__(88);
+const llm_1 = __nccwpck_require__(8842);
+const review_1 = __nccwpck_require__(1366);
+/**
+ * Runs the action from its inputs and the Actions environment. The GitHub
+ * API URL comes from GITHUB_API_URL, which Actions sets (and a dry run
+ * points at a mock server).
+ */
+function runAction(env = process.env) {
+    var _a, _b;
+    return __awaiter(this, void 0, void 0, function* () {
+        const config = (0, config_1.readConfig)(core.getInput, env);
+        const event = JSON.parse((0, fs_1.readFileSync)((_a = env.GITHUB_EVENT_PATH) !== null && _a !== void 0 ? _a : "", "utf8"));
+        const octokit = new rest_1.Octokit({
+            auth: config.githubToken,
+            baseUrl: env.GITHUB_API_URL || "https://api.github.com",
+        });
+        core.info(`Reviewing in ${config.reviewMode} mode with model ${config.model} at ${(_b = config.baseURL) !== null && _b !== void 0 ? _b : "api.openai.com"}`);
+        const outcome = yield (0, review_1.run)(config, event, octokit, (0, llm_1.createClient)(config));
+        if (outcome.status === "skipped") {
+            core.notice(`AI review skipped: ${outcome.reason}`);
+        }
+        else if (outcome.status === "summarized") {
+            core.info(`AI review summary comment ${outcome.comment}`);
+        }
+        else {
+            core.info(`AI review posted ${outcome.comments} inline comment(s)`);
+        }
+        return outcome;
+    });
+}
+exports.runAction = runAction;
+
+
+/***/ }),
+
 /***/ 88:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -31,6 +109,8 @@ function readCount(getInput, name, fallback, min) {
  * variable of the same name. With a base URL set the model defaults to
  * lab-coder and the key may be left out (a relay in front of the endpoint
  * holds the real one); without one the action keeps its OpenAI defaults.
+ * The review mode follows the same rule: summary with a base URL, inline
+ * without, unless review_mode says otherwise.
  */
 function readConfig(getInput, env = process.env) {
     var _a;
@@ -41,6 +121,10 @@ function readConfig(getInput, env = process.env) {
     if (!apiKey && !baseURL) {
         throw new Error("OPENAI_API_KEY is required when no base URL is set");
     }
+    const mode = getInput("review_mode").trim() || (baseURL ? "summary" : "inline");
+    if (mode !== "inline" && mode !== "summary") {
+        throw new Error(`Input review_mode must be inline or summary, got "${mode}"`);
+    }
     return {
         githubToken: getInput("GITHUB_TOKEN"),
         apiKey: apiKey || exports.PLACEHOLDER_API_KEY,
@@ -49,6 +133,8 @@ function readConfig(getInput, env = process.env) {
             (baseURL ? exports.LAB_DEFAULT_MODEL : exports.OPENAI_DEFAULT_MODEL),
         timeoutMs: readCount(getInput, "timeout_seconds", 300, 1) * 1000,
         maxRetries: readCount(getInput, "max_retries", 2, 0),
+        reviewMode: mode,
+        maxDiffChars: readCount(getInput, "max_diff_chars", 60000, 1000),
         exclude: getInput("exclude")
             .split(",")
             .map((s) => s.trim()),
@@ -97,7 +183,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getAIResponse = exports.parseReviews = exports.asUnavailable = exports.createClient = exports.EndpointUnavailableError = void 0;
+exports.getSummary = exports.stripThinking = exports.getAIResponse = exports.parseReviews = exports.asUnavailable = exports.createClient = exports.EndpointUnavailableError = void 0;
 const openai_1 = __importStar(__nccwpck_require__(47));
 /**
  * The model endpoint cannot serve the review right now: it answered 503
@@ -179,74 +265,39 @@ function getAIResponse(openai, model, prompt) {
     });
 }
 exports.getAIResponse = getAIResponse;
-
-
-/***/ }),
-
-/***/ 3109:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || function (mod) {
-    if (mod && mod.__esModule) return mod;
-    var result = {};
-    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
-    __setModuleDefault(result, mod);
-    return result;
-};
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const fs_1 = __nccwpck_require__(7147);
-const core = __importStar(__nccwpck_require__(2186));
-const rest_1 = __nccwpck_require__(5375);
-const config_1 = __nccwpck_require__(88);
-const llm_1 = __nccwpck_require__(8842);
-const review_1 = __nccwpck_require__(1366);
-function main() {
+/** Strips a leading <think>...</think> block that reasoning models may emit. */
+function stripThinking(content) {
+    return content.replace(/^\s*<think>[\s\S]*?<\/think>/, "").trim();
+}
+exports.stripThinking = stripThinking;
+/**
+ * Asks the model for a whole-PR summary in Markdown. Throws
+ * EndpointUnavailableError when the endpoint is busy or slow; any other
+ * error is logged and gives null, and an empty reply gives null too.
+ */
+function getSummary(openai, model, prompt) {
     var _a, _b;
     return __awaiter(this, void 0, void 0, function* () {
-        const config = (0, config_1.readConfig)(core.getInput);
-        const event = JSON.parse((0, fs_1.readFileSync)((_a = process.env.GITHUB_EVENT_PATH) !== null && _a !== void 0 ? _a : "", "utf8"));
-        const octokit = new rest_1.Octokit({ auth: config.githubToken });
-        core.info(`Reviewing with model ${config.model} at ${(_b = config.baseURL) !== null && _b !== void 0 ? _b : "api.openai.com"}`);
-        const outcome = yield (0, review_1.run)(config, event, octokit, (0, llm_1.createClient)(config));
-        if (outcome.status === "skipped") {
-            core.notice(`AI review skipped: ${outcome.reason}`);
+        try {
+            const response = yield openai.chat.completions.create({
+                model,
+                temperature: 0.2,
+                max_tokens: 1500,
+                messages: [{ role: "user", content: prompt }],
+            });
+            const text = stripThinking((_b = (_a = response.choices[0].message) === null || _a === void 0 ? void 0 : _a.content) !== null && _b !== void 0 ? _b : "");
+            return text || null;
         }
-        else {
-            core.info(`AI review posted ${outcome.comments} comment(s)`);
+        catch (error) {
+            const unavailable = asUnavailable(error);
+            if (unavailable)
+                throw unavailable;
+            console.error("Error:", error);
+            return null;
         }
     });
 }
-main().catch((error) => {
-    console.error("Error:", error);
-    process.exit(1);
-});
+exports.getSummary = getSummary;
 
 
 /***/ }),
@@ -257,7 +308,7 @@ main().catch((error) => {
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createPrompt = void 0;
+exports.createSummaryPrompt = exports.boundedDiff = exports.fileDiffText = exports.createPrompt = void 0;
 /** Builds the per-chunk prompt that asks for inline review comments. */
 function createPrompt(file, chunk, prDetails) {
     return `Your task is to review pull requests. Instructions:
@@ -289,6 +340,63 @@ ${chunk.changes
 `;
 }
 exports.createPrompt = createPrompt;
+/** Rebuilds unified diff text for a parsed file, for the summary prompt. */
+function fileDiffText(file) {
+    var _a, _b;
+    const header = `--- ${(_a = file.from) !== null && _a !== void 0 ? _a : "/dev/null"}\n+++ ${(_b = file.to) !== null && _b !== void 0 ? _b : "/dev/null"}`;
+    const chunks = file.chunks.map((chunk) => [chunk.content, ...chunk.changes.map((c) => c.content)].join("\n"));
+    return [header, ...chunks].join("\n");
+}
+exports.fileDiffText = fileDiffText;
+/**
+ * Joins the file diffs up to maxChars, keeping whole files. Returns the
+ * text and the paths left out so the comment can say what was not read.
+ */
+function boundedDiff(files, maxChars) {
+    var _a, _b;
+    const parts = [];
+    const omitted = [];
+    let used = 0;
+    for (const file of files) {
+        const text = fileDiffText(file);
+        if (used + text.length > maxChars) {
+            omitted.push((_b = (_a = file.to) !== null && _a !== void 0 ? _a : file.from) !== null && _b !== void 0 ? _b : "?");
+            continue;
+        }
+        parts.push(text);
+        used += text.length;
+    }
+    return { text: parts.join("\n"), omitted };
+}
+exports.boundedDiff = boundedDiff;
+/** Builds the one prompt that asks for a whole-PR summary review. */
+function createSummaryPrompt(diffText, prDetails) {
+    return `You are reviewing a pull request. Reply in GitHub Markdown with exactly two sections:
+
+**Summary**: one short paragraph on what the change does.
+
+**Findings**: a list of concrete problems (bugs, security issues, broken edge cases, missing tests), most severe first. Start each item with the file path and line, for example \`src/app.ts:12\`. If there are none, write "No problems found."
+
+Rules:
+- Do not praise the change or restate the diff line by line.
+- Comment only on the code; use the description for context.
+- Never suggest adding code comments.
+
+Pull request title: ${prDetails.title}
+Pull request description:
+
+---
+${prDetails.description}
+---
+
+Diff:
+
+\`\`\`diff
+${diffText}
+\`\`\`
+`;
+}
+exports.createSummaryPrompt = createSummaryPrompt;
 
 
 /***/ }),
@@ -311,13 +419,14 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.run = exports.analyzeCode = exports.createComment = exports.filterFiles = exports.getEventDiff = exports.getPRDetails = void 0;
+exports.run = exports.analyzeCode = exports.createComment = exports.filterFiles = exports.getEventDiff = exports.getFullDiff = exports.getPRDetails = void 0;
 const parse_diff_1 = __importDefault(__nccwpck_require__(4833));
 const minimatch_1 = __importDefault(__nccwpck_require__(2002));
 const llm_1 = __nccwpck_require__(8842);
 const prompt_1 = __nccwpck_require__(2063);
+const summary_1 = __nccwpck_require__(8608);
 function getPRDetails(octokit, event) {
-    var _a, _b;
+    var _a, _b, _c;
     return __awaiter(this, void 0, void 0, function* () {
         const { repository, number } = event;
         const prResponse = yield octokit.pulls.get({
@@ -331,10 +440,24 @@ function getPRDetails(octokit, event) {
             pull_number: number,
             title: (_a = prResponse.data.title) !== null && _a !== void 0 ? _a : "",
             description: (_b = prResponse.data.body) !== null && _b !== void 0 ? _b : "",
+            headSha: (_c = prResponse.data.head) === null || _c === void 0 ? void 0 : _c.sha,
         };
     });
 }
 exports.getPRDetails = getPRDetails;
+/** Returns the whole PR diff against its base. */
+function getFullDiff(octokit, prDetails) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const response = yield octokit.pulls.get({
+            owner: prDetails.owner,
+            repo: prDetails.repo,
+            pull_number: prDetails.pull_number,
+            mediaType: { format: "diff" },
+        });
+        return String(response.data);
+    });
+}
+exports.getFullDiff = getFullDiff;
 /**
  * Returns the diff to review: the whole PR when it is opened, only the new
  * commits on synchronize, and undefined for any other event action.
@@ -343,14 +466,7 @@ function getEventDiff(octokit, event, prDetails) {
     var _a, _b;
     return __awaiter(this, void 0, void 0, function* () {
         if (event.action === "opened") {
-            const response = yield octokit.pulls.get({
-                owner: prDetails.owner,
-                repo: prDetails.repo,
-                pull_number: prDetails.pull_number,
-                mediaType: { format: "diff" },
-            });
-            // @ts-expect-error - response.data is a string
-            return response.data;
+            return getFullDiff(octokit, prDetails);
         }
         if (event.action === "synchronize") {
             const response = yield octokit.repos.compareCommits({
@@ -404,13 +520,36 @@ function analyzeCode(parsedDiff, prDetails, ask) {
     });
 }
 exports.analyzeCode = analyzeCode;
-/**
- * Reviews one pull_request event end to end. An unavailable model
- * endpoint skips the review and posts nothing.
- */
-function run(config, event, octokit, openai) {
+/** Summary mode: one prompt for the whole PR, one comment kept current. */
+function runSummary(config, event, prDetails, octokit, openai) {
+    var _a;
     return __awaiter(this, void 0, void 0, function* () {
-        const prDetails = yield getPRDetails(octokit, event);
+        if (!summary_1.SUMMARY_ACTIONS.includes((_a = event.action) !== null && _a !== void 0 ? _a : "")) {
+            return {
+                status: "skipped",
+                reason: `unsupported event action "${event.action}"`,
+            };
+        }
+        const files = filterFiles((0, parse_diff_1.default)(yield getFullDiff(octokit, prDetails)), config.exclude).filter((file) => file.to !== "/dev/null");
+        if (files.length === 0) {
+            return { status: "skipped", reason: "no diff found" };
+        }
+        const { text, omitted } = (0, prompt_1.boundedDiff)(files, config.maxDiffChars);
+        if (!text) {
+            return { status: "skipped", reason: "every file is over max_diff_chars" };
+        }
+        const summary = yield (0, llm_1.getSummary)(openai, config.model, (0, prompt_1.createSummaryPrompt)(text, prDetails));
+        if (!summary) {
+            return { status: "skipped", reason: "the model gave no usable reply" };
+        }
+        const body = (0, summary_1.formatSummaryComment)(summary, config.model, prDetails, omitted);
+        const comment = yield (0, summary_1.upsertSummaryComment)(octokit, prDetails, body);
+        return { status: "summarized", comment };
+    });
+}
+/** Inline mode: one prompt per chunk, findings as line comments. */
+function runInline(config, event, prDetails, octokit, openai) {
+    return __awaiter(this, void 0, void 0, function* () {
         const diff = yield getEventDiff(octokit, event, prDetails);
         if (diff === undefined) {
             return {
@@ -422,16 +561,7 @@ function run(config, event, octokit, openai) {
             return { status: "skipped", reason: "no diff found" };
         }
         const files = filterFiles((0, parse_diff_1.default)(diff), config.exclude);
-        let comments;
-        try {
-            comments = yield analyzeCode(files, prDetails, (prompt) => (0, llm_1.getAIResponse)(openai, config.model, prompt));
-        }
-        catch (error) {
-            if (error instanceof llm_1.EndpointUnavailableError) {
-                return { status: "skipped", reason: error.message };
-            }
-            throw error;
-        }
+        const comments = yield analyzeCode(files, prDetails, (prompt) => (0, llm_1.getAIResponse)(openai, config.model, prompt));
         if (comments.length > 0) {
             yield octokit.pulls.createReview({
                 owner: prDetails.owner,
@@ -444,7 +574,95 @@ function run(config, event, octokit, openai) {
         return { status: "reviewed", comments: comments.length };
     });
 }
+/**
+ * Reviews one pull_request event end to end in the configured mode. An
+ * unavailable model endpoint skips the review and posts nothing.
+ */
+function run(config, event, octokit, openai) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const prDetails = yield getPRDetails(octokit, event);
+        const review = config.reviewMode === "summary" ? runSummary : runInline;
+        try {
+            return yield review(config, event, prDetails, octokit, openai);
+        }
+        catch (error) {
+            if (error instanceof llm_1.EndpointUnavailableError) {
+                return { status: "skipped", reason: error.message };
+            }
+            throw error;
+        }
+    });
+}
 exports.run = run;
+
+
+/***/ }),
+
+/***/ 8608:
+/***/ (function(__unused_webpack_module, exports) {
+
+"use strict";
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.upsertSummaryComment = exports.formatSummaryComment = exports.SUMMARY_ACTIONS = exports.SUMMARY_MARKER = void 0;
+/** Hidden marker that identifies this action's summary comment on a PR. */
+exports.SUMMARY_MARKER = "<!-- ai-codereviewer:summary -->";
+/** Event actions that get a summary: each one reviews the whole PR again. */
+exports.SUMMARY_ACTIONS = [
+    "opened",
+    "reopened",
+    "synchronize",
+    "ready_for_review",
+];
+/** Wraps the model's text with the marker, a heading and a footer. */
+function formatSummaryComment(text, model, prDetails, omitted) {
+    const lines = [exports.SUMMARY_MARKER, "### AI review", "", text, ""];
+    if (omitted.length > 0) {
+        lines.push(`> Not reviewed (diff too large): ${omitted
+            .map((p) => `\`${p}\``)
+            .join(", ")}`, "");
+    }
+    const commit = prDetails.headSha
+        ? ` · commit ${prDetails.headSha.slice(0, 7)}`
+        : "";
+    lines.push(`<sub>Model \`${model}\`${commit} · advisory only</sub>`);
+    return lines.join("\n");
+}
+exports.formatSummaryComment = formatSummaryComment;
+/**
+ * Posts the summary as one PR comment, or edits the earlier one that
+ * carries the marker, so a PR never collects more than one.
+ */
+function upsertSummaryComment(octokit, prDetails, body) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const target = {
+            owner: prDetails.owner,
+            repo: prDetails.repo,
+        };
+        for (let page = 1;; page++) {
+            const { data } = yield octokit.issues.listComments(Object.assign(Object.assign({}, target), { issue_number: prDetails.pull_number, per_page: 100, page }));
+            const existing = data.find((c) => { var _a; return (_a = c.body) === null || _a === void 0 ? void 0 : _a.includes(exports.SUMMARY_MARKER); });
+            if (existing) {
+                yield octokit.issues.updateComment(Object.assign(Object.assign({}, target), { comment_id: existing.id, body }));
+                return "updated";
+            }
+            if (data.length < 100)
+                break;
+        }
+        yield octokit.issues.createComment(Object.assign(Object.assign({}, target), { issue_number: prDetails.pull_number, body }));
+        return "created";
+    });
+}
+exports.upsertSummaryComment = upsertSummaryComment;
 
 
 /***/ }),
@@ -23171,13 +23389,22 @@ module.exports = JSON.parse('[[[0,44],"disallowed_STD3_valid"],[[45,46],"valid"]
 /******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
 /******/ 	
 /************************************************************************/
-/******/ 	
-/******/ 	// startup
-/******/ 	// Load entry module and return exports
-/******/ 	// This entry module is referenced by other modules so it can't be inlined
-/******/ 	var __webpack_exports__ = __nccwpck_require__(3109);
-/******/ 	module.exports = __webpack_exports__;
-/******/ 	
+var __webpack_exports__ = {};
+// This entry need to be wrapped in an IIFE because it need to be in strict mode.
+(() => {
+"use strict";
+var exports = __webpack_exports__;
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const action_1 = __nccwpck_require__(9139);
+(0, action_1.runAction)().catch((error) => {
+    console.error("Error:", error);
+    process.exit(1);
+});
+
+})();
+
+module.exports = __webpack_exports__;
 /******/ })()
 ;
 //# sourceMappingURL=index.js.map

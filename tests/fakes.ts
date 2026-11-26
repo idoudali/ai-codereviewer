@@ -32,13 +32,22 @@ export function fakeOctokit(diff: string = DIFF) {
   const calls = {
     reviews: [] as unknown[],
     comments: [] as unknown[],
+    updates: [] as unknown[],
+    /** Comments already on the PR, as listComments returns them. */
+    existing: [] as Array<{ id: number; body: string }>,
   };
   const octokit = {
     pulls: {
       get: async (params: { mediaType?: { format: string } }) =>
         params.mediaType?.format === "diff"
           ? { data: diff }
-          : { data: { title: "Add b", body: "Adds b." } },
+          : {
+              data: {
+                title: "Add b",
+                body: "Adds b.",
+                head: { sha: "abcdef0123456789" },
+              },
+            },
       createReview: async (params: unknown) => {
         calls.reviews.push(params);
       },
@@ -47,8 +56,12 @@ export function fakeOctokit(diff: string = DIFF) {
       compareCommits: async () => ({ data: diff }),
     },
     issues: {
+      listComments: async () => ({ data: calls.existing }),
       createComment: async (params: unknown) => {
         calls.comments.push(params);
+      },
+      updateComment: async (params: unknown) => {
+        calls.updates.push(params);
       },
     },
   };
