@@ -1,5 +1,36 @@
 # AI Code Reviewer
 
+This fork now hosts a **reusable GitHub workflow that reviews pull requests with
+[Gito](https://github.com/Nayjest/Gito)** against an OpenAI-compatible endpoint, such as the home-lab LiteLLM gateway.
+The original TypeScript action below is unmaintained upstream (last commit December 2023) and is kept only for
+reference.
+
+## Gito review workflow
+
+[`.github/workflows/gito-review.yml`](.github/workflows/gito-review.yml) runs `gito review` on the PR and posts one
+summary comment (Gito collapses its earlier comments). Nothing about the endpoint is built in:
+
+| Input                  | Default     | Notes                                                          |
+| ---------------------- | ----------- | -------------------------------------------------------------- |
+| `llm_api_base`         | (required)  | OpenAI-compatible base URL ending in `/v1`, e.g. the CI relay. |
+| `model`                | `lab-coder` | Model name or gateway alias.                                   |
+| `runs_on`              | `home-lab`  | Runner label: the repo's lab scale set.                        |
+| `gito_version`         | `4.5.0`     | Exact `gito.bot` version.                                      |
+| `max_concurrent_tasks` | `2`         | Parallel model requests; the relay allows two.                 |
+| `timeout_minutes`      | `20`        | Job timeout.                                                   |
+| secret `llm_api_key`   | `unused`    | Leave out when the relay holds the key.                        |
+
+The review is advisory. The job has `continue-on-error`, skips draft PRs, and when the endpoint answers `503`, times
+out or refuses the connection, it writes a notice "Gito review skipped" and posts nothing. The tokenizer file Gito
+downloads on its first run is cached with `actions/cache`.
+
+A private repo calls it with [`examples/gito-review-caller.yml`](examples/gito-review-caller.yml). Pin `@<commit>`, set a
+`LAB_LLM_BASE_URL` variable, and adjust the review itself with a `.gito/config.toml` in that repo (see Gito's
+[default config](https://github.com/Nayjest/Gito/blob/main/gito/config.toml)). For a long diff on a local model, lower
+`max_code_tokens` there.
+
+## Original action (unmaintained)
+
 AI Code Reviewer is a GitHub Action that leverages OpenAI's GPT-4 API to provide intelligent feedback and suggestions on
 your pull requests. This powerful tool helps improve code quality and saves developers time by automating the code
 review process.

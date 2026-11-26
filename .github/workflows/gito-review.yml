@@ -1,0 +1,100 @@
+# Reusable PR review with Gito (https://github.com/Nayjest/Gito) against an
+# OpenAI-compatible endpoint, such as the home-lab LiteLLM gateway through
+# the CI relay. Nothing about the endpoint is built in: the base URL, the
+# model and the key are all inputs. The review is advisory: a busy (503) or
+# slow endpoint skips it with a notice, and the job never fails a PR.
+name: Gito review
+
+on:
+  workflow_call:
+    inputs:
+      llm_api_base:
+        description: OpenAI-compatible base URL ending in /v1.
+        type: string
+        required: true
+      model:
+        description: Model name or gateway alias.
+        type: string
+        default: lab-coder
+      runs_on:
+        description: Runner label, for example home-lab (the repo's ARC scale set).
+        type: string
+        default: home-lab
+      gito_version:
+        description: Exact gito.bot version from PyPI.
+        type: string
+        default: "4.5.0"
+      max_concurrent_tasks:
+        description: Parallel model requests; the CI relay allows two.
+        type: number
+        default: 2
+      timeout_minutes:
+        type: number
+        default: 20
+    secrets:
+      llm_api_key:
+        description: Key for the endpoint. Leave out when a relay holds it.
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    continue-on-error: true
+    env:
+      LLM_API_TYPE: openai
+      LLM_API_BASE: ${{ inputs.llm_api_base }}
+      LLM_API_KEY: ${{ secrets.llm_api_key || 'unused' }}
+      MODEL: ${{ inputs.model }}
+      MAX_CONCURRENT_TASKS: ${{ inputs.max_concurrent_tasks }}
+      TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/../.tiktoken-cache
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Cache the tokenizer file
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/../.tiktoken-cache
+          key: tiktoken-cl100k_base
+      - name: Install Gito
+        run: pip install "gito.bot==${{ inputs.gito_version }}"
+      - name: Review
+        id: review
+        # A 503 (model loading, training lock), a timeout or a refused
+        # connection to the endpoint skips the review with a notice; any
+        # other error fails the step, which continue-on-error keeps advisory.
+        run: |
+          set +e
+          gito --verbose review 2>&1 | tee gito-review.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "reviewed=true" >> "$GITHUB_OUTPUT"
+          elif grep -qiE '503|service unavailable|timed? ?out|connection (refused|error)' gito-review.log; then
+            echo "::notice title=Gito review skipped::the model endpoint is unavailable (503, timeout or no connection)"
+          else
+            exit "$status"
+          fi
+      - name: Post the review comment
+        if: steps.review.outputs.reviewed == 'true'
+        env:
+          PR_NUMBER_FROM_WORKFLOW_DISPATCH: ${{ github.event.inputs.pr_number }}
+        run: gito github-comment
+      - name: Keep the report
+        if: steps.review.outputs.reviewed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gito-code-review
+          path: |
+            code-review-report.md
+            code-review-report.json

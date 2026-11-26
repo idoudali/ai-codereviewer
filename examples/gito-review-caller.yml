@@ -1,0 +1,30 @@
+# Copy to .github/workflows/ai-review.yml in a private repo with a lab
+# runner scale set. LAB_LLM_BASE_URL is a repository (or account) variable
+# holding the CI relay URL ending in /v1.
+name: AI review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number
+        required: true
+
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    # Pin to a commit of idoudali/ai-codereviewer, not a branch.
+    uses: idoudali/ai-codereviewer/.github/workflows/gito-review.yml@main
+    with:
+      llm_api_base: ${{ vars.LAB_LLM_BASE_URL }}
+      model: lab-coder
+      runs_on: home-lab

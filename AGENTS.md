@@ -1,6 +1,8 @@
 # Agent instructions
 
-A GitHub Action that reviews pull requests with an LLM (TypeScript, built into `dist/`).
+Hosts `.github/workflows/gito-review.yml`, a reusable workflow that reviews PRs with Gito against an OpenAI-compatible endpoint. The TypeScript action in `src/` and `dist/` is the unmaintained upstream, kept for reference; do not extend it.
+
+Lint workflows with actionlint 1.7.12 (CI runs it).
 
 ## Commits and pull requests
 
