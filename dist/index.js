@@ -7,13 +7,48 @@ require('./sourcemap-register.js');/******/ (() => { // webpackBootstrap
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.readConfig = void 0;
-/** Collects the action inputs into one typed object. */
-function readConfig(getInput) {
+exports.readConfig = exports.PLACEHOLDER_API_KEY = exports.OPENAI_DEFAULT_MODEL = exports.LAB_DEFAULT_MODEL = void 0;
+/** Model used when a base URL is set and no model is given: the lab alias. */
+exports.LAB_DEFAULT_MODEL = "lab-coder";
+/** Model used against api.openai.com when no model is given. */
+exports.OPENAI_DEFAULT_MODEL = "gpt-4";
+/** Sent as the API key when a base URL is set and no key is given. */
+exports.PLACEHOLDER_API_KEY = "unused";
+function readCount(getInput, name, fallback, min) {
+    const raw = getInput(name).trim();
+    if (raw === "")
+        return fallback;
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < min) {
+        throw new Error(`Input ${name} must be a whole number of at least ${min}, got "${raw}"`);
+    }
+    return value;
+}
+/**
+ * Collects the action inputs into one typed object.
+ *
+ * The base URL comes from the OPENAI_BASE_URL input, else the environment
+ * variable of the same name. With a base URL set the model defaults to
+ * lab-coder and the key may be left out (a relay in front of the endpoint
+ * holds the real one); without one the action keeps its OpenAI defaults.
+ */
+function readConfig(getInput, env = process.env) {
+    var _a;
+    const baseURL = getInput("OPENAI_BASE_URL").trim() ||
+        ((_a = env.OPENAI_BASE_URL) === null || _a === void 0 ? void 0 : _a.trim()) ||
+        undefined;
+    const apiKey = getInput("OPENAI_API_KEY").trim();
+    if (!apiKey && !baseURL) {
+        throw new Error("OPENAI_API_KEY is required when no base URL is set");
+    }
     return {
         githubToken: getInput("GITHUB_TOKEN"),
-        apiKey: getInput("OPENAI_API_KEY"),
-        model: getInput("OPENAI_API_MODEL"),
+        apiKey: apiKey || exports.PLACEHOLDER_API_KEY,
+        baseURL,
+        model: getInput("OPENAI_API_MODEL").trim() ||
+            (baseURL ? exports.LAB_DEFAULT_MODEL : exports.OPENAI_DEFAULT_MODEL),
+        timeoutMs: readCount(getInput, "timeout_seconds", 300, 1) * 1000,
+        maxRetries: readCount(getInput, "max_retries", 2, 0),
         exclude: getInput("exclude")
             .split(",")
             .map((s) => s.trim()),
@@ -25,10 +60,33 @@ exports.readConfig = readConfig;
 /***/ }),
 
 /***/ 8842:
-/***/ (function(__unused_webpack_module, exports) {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -39,8 +97,56 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getAIResponse = void 0;
-/** Asks the model for inline reviews; any error is logged and gives null. */
+exports.getAIResponse = exports.parseReviews = exports.asUnavailable = exports.createClient = exports.EndpointUnavailableError = void 0;
+const openai_1 = __importStar(__nccwpck_require__(47));
+/**
+ * The model endpoint cannot serve the review right now: it answered 503
+ * (training lock, model loading) or the request timed out. The review is
+ * skipped instead of failing the step.
+ */
+class EndpointUnavailableError extends Error {
+    constructor(reason) {
+        super(`Model endpoint unavailable: ${reason}`);
+        this.reason = reason;
+        this.name = "EndpointUnavailableError";
+    }
+}
+exports.EndpointUnavailableError = EndpointUnavailableError;
+/** Builds the OpenAI client; a base URL points it at an OpenAI-compatible endpoint. */
+function createClient(config) {
+    return new openai_1.default({
+        apiKey: config.apiKey,
+        baseURL: config.baseURL,
+        timeout: config.timeoutMs,
+        maxRetries: config.maxRetries,
+    });
+}
+exports.createClient = createClient;
+/** Maps 503 and timeouts to EndpointUnavailableError; other errors give undefined. */
+function asUnavailable(error) {
+    var _a;
+    if (error instanceof openai_1.APIConnectionTimeoutError) {
+        return new EndpointUnavailableError("request timed out");
+    }
+    if (error instanceof openai_1.APIError && error.status === 503) {
+        const retryAfter = (_a = error.headers) === null || _a === void 0 ? void 0 : _a["retry-after"];
+        return new EndpointUnavailableError(retryAfter ? `503, Retry-After ${retryAfter}` : "503");
+    }
+    return undefined;
+}
+exports.asUnavailable = asUnavailable;
+/** Reads the reviews array from a reply, allowing a ```json fence around it. */
+function parseReviews(content) {
+    const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+    const json = (fenced ? fenced[1] : content).trim() || "{}";
+    return JSON.parse(json).reviews;
+}
+exports.parseReviews = parseReviews;
+/**
+ * Asks the model for inline reviews. Throws EndpointUnavailableError when
+ * the endpoint is busy or slow; any other error is logged and gives null,
+ * so one bad chunk does not stop the review.
+ */
 function getAIResponse(openai, model, prompt) {
     var _a, _b;
     return __awaiter(this, void 0, void 0, function* () {
@@ -61,10 +167,12 @@ function getAIResponse(openai, model, prompt) {
                         content: prompt,
                     },
                 ] }));
-            const res = ((_b = (_a = response.choices[0].message) === null || _a === void 0 ? void 0 : _a.content) === null || _b === void 0 ? void 0 : _b.trim()) || "{}";
-            return JSON.parse(res).reviews;
+            return parseReviews((_b = (_a = response.choices[0].message) === null || _a === void 0 ? void 0 : _a.content) !== null && _b !== void 0 ? _b : "");
         }
         catch (error) {
+            const unavailable = asUnavailable(error);
+            if (unavailable)
+                throw unavailable;
             console.error("Error:", error);
             return null;
         }
@@ -112,24 +220,27 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const fs_1 = __nccwpck_require__(7147);
 const core = __importStar(__nccwpck_require__(2186));
-const openai_1 = __importDefault(__nccwpck_require__(47));
 const rest_1 = __nccwpck_require__(5375);
 const config_1 = __nccwpck_require__(88);
+const llm_1 = __nccwpck_require__(8842);
 const review_1 = __nccwpck_require__(1366);
 function main() {
-    var _a;
+    var _a, _b;
     return __awaiter(this, void 0, void 0, function* () {
         const config = (0, config_1.readConfig)(core.getInput);
         const event = JSON.parse((0, fs_1.readFileSync)((_a = process.env.GITHUB_EVENT_PATH) !== null && _a !== void 0 ? _a : "", "utf8"));
         const octokit = new rest_1.Octokit({ auth: config.githubToken });
-        const openai = new openai_1.default({ apiKey: config.apiKey });
-        yield (0, review_1.run)(config, event, octokit, openai);
+        core.info(`Reviewing with model ${config.model} at ${(_b = config.baseURL) !== null && _b !== void 0 ? _b : "api.openai.com"}`);
+        const outcome = yield (0, review_1.run)(config, event, octokit, (0, llm_1.createClient)(config));
+        if (outcome.status === "skipped") {
+            core.notice(`AI review skipped: ${outcome.reason}`);
+        }
+        else {
+            core.info(`AI review posted ${outcome.comments} comment(s)`);
+        }
     });
 }
 main().catch((error) => {
@@ -293,21 +404,34 @@ function analyzeCode(parsedDiff, prDetails, ask) {
     });
 }
 exports.analyzeCode = analyzeCode;
-/** Reviews one pull_request event end to end. */
+/**
+ * Reviews one pull_request event end to end. An unavailable model
+ * endpoint skips the review and posts nothing.
+ */
 function run(config, event, octokit, openai) {
     return __awaiter(this, void 0, void 0, function* () {
         const prDetails = yield getPRDetails(octokit, event);
         const diff = yield getEventDiff(octokit, event, prDetails);
         if (diff === undefined) {
-            console.log("Unsupported event:", process.env.GITHUB_EVENT_NAME);
-            return;
+            return {
+                status: "skipped",
+                reason: `unsupported event action "${event.action}"`,
+            };
         }
         if (!diff) {
-            console.log("No diff found");
-            return;
+            return { status: "skipped", reason: "no diff found" };
         }
         const files = filterFiles((0, parse_diff_1.default)(diff), config.exclude);
-        const comments = yield analyzeCode(files, prDetails, (prompt) => (0, llm_1.getAIResponse)(openai, config.model, prompt));
+        let comments;
+        try {
+            comments = yield analyzeCode(files, prDetails, (prompt) => (0, llm_1.getAIResponse)(openai, config.model, prompt));
+        }
+        catch (error) {
+            if (error instanceof llm_1.EndpointUnavailableError) {
+                return { status: "skipped", reason: error.message };
+            }
+            throw error;
+        }
         if (comments.length > 0) {
             yield octokit.pulls.createReview({
                 owner: prDetails.owner,
@@ -317,6 +441,7 @@ function run(config, event, octokit, openai) {
                 event: "COMMENT",
             });
         }
+        return { status: "reviewed", comments: comments.length };
     });
 }
 exports.run = run;

@@ -12,7 +12,7 @@ const inputs: Record<string, string> = {
   OPENAI_API_MODEL: "gpt-4",
   exclude: "**/*.md, dist/**",
 };
-const config = readConfig((name) => inputs[name] ?? "");
+const config = readConfig((name) => inputs[name] ?? "", {});
 
 describe("readConfig", () => {
   /** Exclude globs are split on commas and trimmed. */
@@ -88,10 +88,15 @@ describe("run", () => {
 
   /** Event actions other than opened and synchronize post nothing. */
   it("ignores other event actions", async () => {
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
     const { octokit, calls } = fakeOctokit();
     const { openai, prompts } = fakeOpenAI("{}");
-    await run(config, { ...openedEvent(), action: "labeled" }, octokit, openai);
+    const outcome = await run(
+      config,
+      { ...openedEvent(), action: "labeled" },
+      octokit,
+      openai
+    );
+    expect(outcome.status).toBe("skipped");
     expect(prompts).toHaveLength(0);
     expect(calls.reviews).toHaveLength(0);
   });

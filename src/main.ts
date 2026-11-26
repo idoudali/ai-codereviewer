@@ -1,8 +1,8 @@
 import { readFileSync } from "fs";
 import * as core from "@actions/core";
-import OpenAI from "openai";
 import { Octokit } from "@octokit/rest";
 import { readConfig } from "./config";
+import { createClient } from "./llm";
 import { PullRequestEvent, run } from "./review";
 
 async function main() {
@@ -11,8 +11,17 @@ async function main() {
     readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8")
   );
   const octokit = new Octokit({ auth: config.githubToken });
-  const openai = new OpenAI({ apiKey: config.apiKey });
-  await run(config, event, octokit, openai);
+  core.info(
+    `Reviewing with model ${config.model} at ${
+      config.baseURL ?? "api.openai.com"
+    }`
+  );
+  const outcome = await run(config, event, octokit, createClient(config));
+  if (outcome.status === "skipped") {
+    core.notice(`AI review skipped: ${outcome.reason}`);
+  } else {
+    core.info(`AI review posted ${outcome.comments} comment(s)`);
+  }
 }
 
 main().catch((error) => {

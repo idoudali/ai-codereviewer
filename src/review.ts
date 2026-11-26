@@ -3,7 +3,7 @@ import OpenAI from "openai";
 import parseDiff, { Chunk, File } from "parse-diff";
 import minimatch from "minimatch";
 import { Config } from "./config";
-import { AIReview, getAIResponse } from "./llm";
+import { AIReview, EndpointUnavailableError, getAIResponse } from "./llm";
 import { createPrompt, PRDetails } from "./prompt";
 
 export interface ReviewComment {
@@ -20,6 +20,11 @@ export interface PullRequestEvent {
   after?: string;
   repository: { name: string; owner: { login: string } };
 }
+
+/** What a run did, so the entry point can report it. */
+export type RunOutcome =
+  | { status: "reviewed"; comments: number }
+  | { status: "skipped"; reason: string };
 
 export type AskModel = (prompt: string) => Promise<AIReview[] | null>;
 
@@ -121,28 +126,40 @@ export async function analyzeCode(
   return comments;
 }
 
-/** Reviews one pull_request event end to end. */
+/**
+ * Reviews one pull_request event end to end. An unavailable model
+ * endpoint skips the review and posts nothing.
+ */
 export async function run(
   config: Config,
   event: PullRequestEvent,
   octokit: Octokit,
   openai: OpenAI
-): Promise<void> {
+): Promise<RunOutcome> {
   const prDetails = await getPRDetails(octokit, event);
   const diff = await getEventDiff(octokit, event, prDetails);
   if (diff === undefined) {
-    console.log("Unsupported event:", process.env.GITHUB_EVENT_NAME);
-    return;
+    return {
+      status: "skipped",
+      reason: `unsupported event action "${event.action}"`,
+    };
   }
   if (!diff) {
-    console.log("No diff found");
-    return;
+    return { status: "skipped", reason: "no diff found" };
   }
 
   const files = filterFiles(parseDiff(diff), config.exclude);
-  const comments = await analyzeCode(files, prDetails, (prompt) =>
-    getAIResponse(openai, config.model, prompt)
-  );
+  let comments: ReviewComment[];
+  try {
+    comments = await analyzeCode(files, prDetails, (prompt) =>
+      getAIResponse(openai, config.model, prompt)
+    );
+  } catch (error) {
+    if (error instanceof EndpointUnavailableError) {
+      return { status: "skipped", reason: error.message };
+    }
+    throw error;
+  }
   if (comments.length > 0) {
     await octokit.pulls.createReview({
       owner: prDetails.owner,
@@ -152,4 +169,5 @@ export async function run(
       event: "COMMENT",
     });
   }
+  return { status: "reviewed", comments: comments.length };
 }

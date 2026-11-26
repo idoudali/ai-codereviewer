@@ -53,6 +53,32 @@ jobs:
 
 6. Commit the changes to your repository, and AI Code Reviewer will start working on your future pull requests.
 
+## Lab mode: an OpenAI-compatible endpoint
+
+The action can call any OpenAI-compatible server instead of api.openai.com, for example a LiteLLM gateway in front of
+local models. Nothing about the endpoint is built in: the URL, key and model are all inputs.
+
+| Input              | Default                                   | Notes                                                                       |
+| ------------------ | ----------------------------------------- | --------------------------------------------------------------------------- |
+| `OPENAI_BASE_URL`  | `OPENAI_BASE_URL` env var, else OpenAI    | Base URL ending in `/v1`.                                                   |
+| `OPENAI_API_MODEL` | `lab-coder` with a base URL, else `gpt-4` | Any model name or gateway alias.                                            |
+| `OPENAI_API_KEY`   | `unused` with a base URL                  | Required without a base URL. Leave it out when a relay holds the real key.  |
+| `timeout_seconds`  | `300`                                     | Per model request.                                                          |
+| `max_retries`      | `2`                                       | Retries on 429, 5xx and timeouts (the client honours `Retry-After` ≤ 60 s). |
+
+When the endpoint answers `503` (with or without `Retry-After`, for example while a model loads) or a request times
+out after its retries, the action posts nothing, writes a notice "AI review skipped: …" and exits successfully. Other
+errors on a chunk are logged and that chunk is skipped, as before.
+
+```yaml
+- uses: idoudali/ai-codereviewer@<pinned sha>
+  env:
+    OPENAI_BASE_URL: ${{ vars.LAB_LLM_BASE_URL }}
+  with:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    OPENAI_API_MODEL: lab-coder
+```
+
 ## How It Works
 
 The AI Code Reviewer GitHub Action retrieves the pull request diff, filters out excluded files, and sends code chunks to
@@ -63,7 +89,8 @@ the OpenAI API. It then generates review comments based on the AI's response and
 Contributions are welcome! Please feel free to submit issues or pull requests to improve the AI Code Reviewer GitHub
 Action.
 
-Let the maintainer generate the final package (`yarn build` & `yarn package`).
+Run `yarn all` (format check, type check, tests, build, package) and commit `dist/` with your change; CI fails when
+`dist/` is stale.
 
 ## License
 
